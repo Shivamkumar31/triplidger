@@ -1,0 +1,54 @@
+name: tripledger
+services:
+  api:
+    build:
+      context: ./backend
+      target: dev
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set your Neon DATABASE_URL in .env}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      REDIS_URL: ${REDIS_URL:-}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-60}
+      REDIS_TIMEOUT_MS: ${REDIS_TIMEOUT_MS:-250}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./backend:/app
+      - go-modules:/go/pkg/mod
+      - go-build:/root/.cache/go-build
+    command: sh -c "go mod tidy && go run ."
+    healthcheck:
+      test: ["CMD", "go", "run", ".", "healthcheck"]
+      interval: 30s
+      timeout: 20s
+      start_period: 90s
+      retries: 3
+  web:
+    build:
+      context: ./frontend
+      target: dev
+    environment:
+      API_INTERNAL_URL: http://api:8080
+      NEXT_TELEMETRY_DISABLED: "1"
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./frontend:/app
+      - web-modules:/app/node_modules
+      - web-next:/app/.next
+    depends_on:
+      api:
+        condition: service_healthy
+  # Optional disposable cache. Enable independently: docker compose --profile cache up -d redis
+  redis:
+    image: redis:7.4-alpine
+    profiles: ["cache"]
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+volumes:
+  go-modules:
+  go-build:
+  web-modules:
+  web-next:
+  redis-data:
