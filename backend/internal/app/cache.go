@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strconv"
 	"time"
@@ -90,11 +91,19 @@ func isCacheMiss(err error) bool {
 	return err == redis.Nil
 }
 
+var errMalformedCachedDashboard = errors.New("malformed cached dashboard")
+
 func loadCachedDashboard(cache DashboardCache, ctx context.Context, groupID string, version int64) (map[string]any, bool, error) {
 	raw, err := cache.Get(ctx, dashboardCacheKey(groupID, version))
 	if err != nil {
 		return nil, false, err
 	}
+	if len(raw) == 0 {
+		return nil, false, redis.Nil
+	}
 	payload, ok := decodeCachedDashboard(raw, version, groupID)
-	return payload, ok, nil
+	if !ok {
+		return nil, false, errMalformedCachedDashboard
+	}
+	return payload, true, nil
 }

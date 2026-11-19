@@ -71,15 +71,25 @@ func main() {
 			cacheTTL = time.Duration(n) * time.Second
 		}
 	}
-	a := app.App{DB: db, Origin: origin, Secure: os.Getenv("COOKIE_SECURE") == "true", CacheTTL: cacheTTL}
-	if raw := strings.TrimSpace(os.Getenv("REDIS_URL")); raw != "" {
+	cacheEnabled := true
+	if v, ok := os.LookupEnv("CACHE_ENABLED"); ok {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			cacheEnabled = b
+		}
+	}
+	rawRedisURL := strings.TrimSpace(os.Getenv("REDIS_URL"))
+	if !cacheEnabled {
+		rawRedisURL = ""
+	}
+	a := app.App{DB: db, Origin: origin, Secure: os.Getenv("COOKIE_SECURE") == "true", CacheEnabled: cacheEnabled && rawRedisURL != "", CacheTTL: cacheTTL}
+	if rawRedisURL != "" {
 		timeout := 250 * time.Millisecond
 		if v := os.Getenv("REDIS_TIMEOUT_MS"); v != "" {
 			if n, e := strconv.Atoi(v); e == nil && n > 0 && n <= 5000 {
 				timeout = time.Duration(n) * time.Millisecond
 			}
 		}
-		cache, err := app.NewRedisDashboardCache(raw, timeout)
+		cache, err := app.NewRedisDashboardCache(rawRedisURL, timeout)
 		if err != nil {
 			slog.Error("Invalid Redis configuration; continuing with PostgreSQL cache fallback")
 		} else {

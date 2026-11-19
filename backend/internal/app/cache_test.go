@@ -51,8 +51,8 @@ func TestDashboardCacheFirstMissRepeatedHit(t *testing.T) {
 	groupID := "11111111-1111-1111-1111-111111111111"
 
 	_, ok, err := loadCachedDashboard(cache, ctx, groupID, 1)
-	if err != nil || ok {
-		t.Fatalf("first lookup: ok=%v err=%v", ok, err)
+	if !isCacheMiss(err) || ok {
+		t.Fatalf("first lookup should be a miss: ok=%v err=%v", ok, err)
 	}
 	payload := testPayload(groupID, 1, 90000)
 	rawPayload, _ := json.Marshal(payload)
@@ -75,8 +75,8 @@ func TestDashboardCacheMalformedTimeoutAndOutageFallBack(t *testing.T) {
 	invalid := &fakeDashboardCache{values: map[string][]byte{
 		dashboardCacheKey(groupID, 1): []byte(`{"financial_version":1,"payload":{bad`),
 	}}
-	if _, ok, err := loadCachedDashboard(invalid, ctx, groupID, 1); err != nil || ok {
-		t.Fatalf("malformed cache should be a miss: ok=%v err=%v", ok, err)
+	if _, ok, err := loadCachedDashboard(invalid, ctx, groupID, 1); !errors.Is(err, errMalformedCachedDashboard) || ok {
+		t.Fatalf("malformed cache should fall back with error: ok=%v err=%v", ok, err)
 	}
 
 	timeout := &fakeDashboardCache{values: map[string][]byte{}, err: context.DeadlineExceeded}

@@ -22,12 +22,13 @@ import (
 )
 
 type App struct {
-	DB       *pgxpool.Pool
-	Origin   string
-	Secure   bool
-	limiter  *limiter
-	Cache    DashboardCache
-	CacheTTL time.Duration
+	DB           *pgxpool.Pool
+	Origin       string
+	Secure       bool
+	limiter      *limiter
+	Cache        DashboardCache
+	CacheEnabled bool
+	CacheTTL     time.Duration
 }
 type apiError struct {
 	Status  int

@@ -185,6 +185,13 @@ docker compose restart api
 Redis startup or request failures never make the API unhealthy; the existing `/healthz` check
 still depends only on PostgreSQL.
 
+Set `CACHE_ENABLED=false` to disable all Redis cache operations explicitly, including cache
+initialization and dashboard cache reads/writes. Set it to `true` to enable Redis when
+`REDIS_URL` is configured. Dashboard responses include `X-Cache: HIT`, `MISS`, `BYPASS`, or
+`ERROR`.
+
+For a reproducible local benchmark, use [docs/DASHBOARD_CACHE_BENCHMARK.md](docs/DASHBOARD_CACHE_BENCHMARK.md).
+
 ## Architecture
 
 Browser -> Next.js `/api/*` rewrite -> Go API -> Neon PostgreSQL.

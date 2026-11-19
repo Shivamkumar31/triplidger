@@ -5,6 +5,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"tripledger/internal/ledger"
@@ -206,6 +207,27 @@ func (a *App) settlementAction(w http.ResponseWriter, r *http.Request) error {
 }
 func (a *App) dashboard(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	dbStart := time.Now()
+	var dbDuration time.Duration
+	var cacheGetDuration time.Duration
+	var cacheSetDuration time.Duration
+	setTiming := func() {
+		parts := []string{
+			"db;dur=" + strconv.FormatFloat(float64(dbDuration.Microseconds())/1000, 'f', 3, 64),
+		}
+		if cacheGetDuration > 0 {
+			parts = append(parts, "cache_get;dur="+strconv.FormatFloat(float64(cacheGetDuration.Microseconds())/1000, 'f', 3, 64))
+		}
+		if cacheSetDuration > 0 {
+			parts = append(parts, "cache_set;dur="+strconv.FormatFloat(float64(cacheSetDuration.Microseconds())/1000, 'f', 3, 64))
+		}
+		w.Header().Set("Server-Timing", strings.Join(parts, ", "))
+	}
+	if !a.CacheEnabled {
+		w.Header().Set("X-Cache", "BYPASS")
+	} else if a.Cache == nil {
+		w.Header().Set("X-Cache", "ERROR")
+	}
 	tx, err := a.DB.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return err
@@ -217,26 +239,39 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request) error {
 	err = tx.QueryRow(ctx, `SELECT g.name,g.financial_version,m.role FROM public.groups g JOIN public.group_members m ON m.group_id=g.id WHERE g.id=$1 AND m.user_id=$2 AND m.status='active'`, gid, actor(r)).Scan(&name, &version, &role)
 	if err != nil {
 		if err == pgx.ErrNoRows {
+			dbDuration = time.Since(dbStart)
+			setTiming()
 			return denied()
 		}
 		return err
 	}
-	if a.Cache != nil {
+	dbDuration = time.Since(dbStart)
+	if a.CacheEnabled && a.Cache != nil {
+		cacheStart := time.Now()
 		if payload, ok, cacheErr := loadCachedDashboard(a.Cache, ctx, gid, version); cacheErr == nil {
+			cacheGetDuration = time.Since(cacheStart)
 			if ok {
 				payload["role"] = role
 				tx.Rollback(ctx)
 				cacheLog("hit", gid)
+				w.Header().Set("X-Cache", "HIT")
+				setTiming()
 				send(w, 200, payload)
 				return nil
 			}
 			cacheLog("miss", gid)
+			w.Header().Set("X-Cache", "MISS")
 		} else if isCacheMiss(cacheErr) {
+			cacheGetDuration = time.Since(cacheStart)
 			cacheLog("miss", gid)
+			w.Header().Set("X-Cache", "MISS")
 		} else {
+			cacheGetDuration = time.Since(cacheStart)
 			slog.Info("dashboard cache error", "group_id", gid)
+			w.Header().Set("X-Cache", "ERROR")
 		}
 	}
+	dbPhaseStart := time.Now()
 	// UNION ALL prevents the join-multiplication bug when combining shares and repayments.
 	rows, err := tx.Query(ctx, `WITH entries AS (
  SELECT paid_by AS user_id, amount_paise AS paid, 0::bigint AS owed, amount_paise AS delta FROM public.expenses WHERE group_id=$1 AND voided_at IS NULL
@@ -285,8 +320,9 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request) error {
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
+	dbDuration += time.Since(dbPhaseStart)
 	payload := map[string]any{"id": gid, "name": name, "financial_version": version, "total_paise": total, "members": members, "expenses": json.RawMessage(expenses), "settlements": json.RawMessage(settlements), "suggestions": ledger.Suggest(balances)}
-	if a.Cache != nil {
+	if a.CacheEnabled && a.Cache != nil {
 		payloadJSON, err := json.Marshal(payload)
 		if err != nil {
 			return err
@@ -299,11 +335,17 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request) error {
 		if ttl <= 0 {
 			ttl = 60_000 * time.Millisecond
 		}
+		cacheSetStart := time.Now()
 		if err = a.Cache.Set(ctx, dashboardCacheKey(gid, version), cached, ttl); err != nil {
+			cacheSetDuration = time.Since(cacheSetStart)
 			slog.Info("dashboard cache error", "group_id", gid)
+			w.Header().Set("X-Cache", "ERROR")
+		} else {
+			cacheSetDuration = time.Since(cacheSetStart)
 		}
 	}
 	payload["role"] = role
+	setTiming()
 	send(w, 200, payload)
 	return nil
 }
